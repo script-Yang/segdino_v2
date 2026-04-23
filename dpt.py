@@ -2,106 +2,147 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-class DWRes(nn.Module):
-    def __init__(self, c, use_gn=True):
+
+class ResidualDepthwiseBlock(nn.Module):
+    def __init__(self, channels, use_group_norm=True):
         super().__init__()
-        self.dw = nn.Conv2d(c, c, 3, padding=1, groups=c, bias=False)
-        self.pw = nn.Conv2d(c, c, 1, bias=False)
-        self.norm = nn.GroupNorm(min(32, c), c) if use_gn else nn.BatchNorm2d(c)
+        self.depthwise = nn.Conv2d(channels, channels, 3, padding=1, groups=channels, bias=False)
+        self.pointwise = nn.Conv2d(channels, channels, 1, bias=False)
+        self.norm = (
+            nn.GroupNorm(min(32, channels), channels)
+            if use_group_norm
+            else nn.BatchNorm2d(channels)
+        )
         self.act = nn.GELU()
         self.gamma = nn.Parameter(torch.zeros(1)) 
 
     def forward(self, x):
-        r = self.act(self.norm(self.pw(self.dw(x))))
-        return x + self.gamma * r
+        residual = self.act(self.norm(self.pointwise(self.depthwise(x))))
+        return x + self.gamma * residual
 
-class MiniDPTHead(nn.Module):
-    def __init__(self, in_dims, embed_dim=128, num_classes=2, use_gn=True):
+
+class TPAResampleProject(nn.Module):
+    def __init__(self, channels, scale_factor):
+        super().__init__()
+        self.scale_factor = scale_factor
+        self.conv = nn.Conv2d(channels, channels, 3, padding=1, bias=False)
+
+    def forward(self, x):
+        if self.scale_factor != 1:
+            x = F.interpolate(
+                x,
+                scale_factor=self.scale_factor,
+                mode="bilinear",
+                align_corners=False,
+            )
+        return self.conv(x)
+
+
+class TPASADDecoder(nn.Module):
+    def __init__(self, in_dims, decoder_channels=128, num_classes=2, use_group_norm=True):
         super().__init__()
         assert len(in_dims) == 4
-        
-        # TPA Projections
-        self.proj = nn.ModuleList([nn.Conv2d(c, embed_dim, 1, bias=False) for c in in_dims])
-        
-        # TPA Resizing
-        self.rsz1 = nn.ConvTranspose2d(embed_dim, embed_dim, 4, stride=4, padding=0, bias=False) # 1/4
-        self.rsz2 = nn.ConvTranspose2d(embed_dim, embed_dim, 2, stride=2, padding=0, bias=False) # 1/8
-        self.rsz3 = nn.Identity()                                                                # 1/16
-        self.rsz4 = nn.Conv2d(embed_dim, embed_dim, 3, stride=2, padding=1, bias=False)          # 1/32
 
-        # SAD Intra-scale
-        self.intra_r1 = DWRes(embed_dim, use_gn=use_gn)
-        self.intra_r2 = DWRes(embed_dim, use_gn=use_gn)
-        self.intra_r3 = DWRes(embed_dim, use_gn=use_gn)
-        self.intra_r4 = DWRes(embed_dim, use_gn=use_gn)
+        # TPA: project backbone tokens into decoder channels and align them to
+        # the four spatial branches used by the decoder.
+        self.token_projections = nn.ModuleList(
+            [nn.Conv2d(channels, decoder_channels, 1, bias=False) for channels in in_dims]
+        )
+        self.tpa_branch_1 = TPAResampleProject(decoder_channels, scale_factor=8)
+        self.tpa_branch_2 = TPAResampleProject(decoder_channels, scale_factor=4)
+        self.tpa_branch_3 = TPAResampleProject(decoder_channels, scale_factor=2)
+        self.tpa_branch_4 = TPAResampleProject(decoder_channels, scale_factor=1)
 
-        # SAD Inter-scale
-        self.inter_r4 = DWRes(embed_dim, use_gn=use_gn)
-        self.inter_r3 = DWRes(embed_dim, use_gn=use_gn)
-        self.inter_r2 = DWRes(embed_dim, use_gn=use_gn)
-        self.inter_r1 = DWRes(embed_dim, use_gn=use_gn)
-        
-        self.out_conv = nn.Conv2d(embed_dim, num_classes, 1)
+        # SAD: refine each branch independently, then fuse them from coarse to fine.
+        self.sad_intra_1 = ResidualDepthwiseBlock(decoder_channels, use_group_norm=use_group_norm)
+        self.sad_intra_2 = ResidualDepthwiseBlock(decoder_channels, use_group_norm=use_group_norm)
+        self.sad_intra_3 = ResidualDepthwiseBlock(decoder_channels, use_group_norm=use_group_norm)
+        self.sad_intra_4 = ResidualDepthwiseBlock(decoder_channels, use_group_norm=use_group_norm)
 
-    def forward(self, feats_4, patch_h, patch_w):
-        # --- Token Pyramid Adaptation (TPA) ---
-        p = []
-        for i, x in enumerate(feats_4):
-            x = x.permute(0, 2, 1).reshape((x.shape[0], x.shape[-1], patch_h, patch_w))
-            x = self.proj[i](x)
-            p.append(x)
+        self.sad_inter_4 = ResidualDepthwiseBlock(decoder_channels, use_group_norm=use_group_norm)
+        self.sad_inter_3 = ResidualDepthwiseBlock(decoder_channels, use_group_norm=use_group_norm)
+        self.sad_inter_2 = ResidualDepthwiseBlock(decoder_channels, use_group_norm=use_group_norm)
+        self.sad_inter_1 = ResidualDepthwiseBlock(decoder_channels, use_group_norm=use_group_norm)
 
-        p1 = self.rsz1(p[0])  # H/4
-        p2 = self.rsz2(p[1])  # H/8
-        p3 = self.rsz3(p[2])  # H/16
-        p4 = self.rsz4(p[3])  # H/32
+        self.out_conv = nn.Conv2d(decoder_channels, num_classes, 1)
 
-        # --- Scale-Aware Decoding (SAD) ---
-        l1 = self.intra_r1(p1)
-        l2 = self.intra_r2(p2)
-        l3 = self.intra_r3(p3)
-        l4 = self.intra_r4(p4)
+    def _tokens_to_feature_map(self, x, patch_h, patch_w):
+        if isinstance(x, (list, tuple)):
+            x = x[0]
 
-        # Inter-scale fusion
-        x4 = self.inter_r4(l4)
+        num_patches = patch_h * patch_w
+        if x.ndim != 3:
+            raise ValueError(f"Expected token tensor with 3 dims, got shape {tuple(x.shape)}")
+        if x.shape[1] < num_patches:
+            raise ValueError(
+                f"Token count {x.shape[1]} is smaller than expected patch grid {num_patches}"
+            )
+        if x.shape[1] != num_patches:
+            x = x[:, -num_patches:, :]
 
-        x3_up = F.interpolate(x4, size=l3.shape[-2:], mode="bilinear", align_corners=False)
-        x3 = self.inter_r3(x3_up + l3)
+        return x.transpose(1, 2).reshape(x.shape[0], x.shape[-1], patch_h, patch_w)
 
-        x2_up = F.interpolate(x3, size=l2.shape[-2:], mode="bilinear", align_corners=False)
-        x2 = self.inter_r2(x2_up + l2)
+    def forward(self, features, patch_h, patch_w):
+        # TPA starts here: token sequences become a four-branch feature pyramid.
+        branches = []
+        for index, tokens in enumerate(features):
+            feature_map = self._tokens_to_feature_map(tokens, patch_h, patch_w)
+            feature_map = self.token_projections[index](feature_map)
+            branches.append(feature_map)
 
-        x1_up = F.interpolate(x2, size=l1.shape[-2:], mode="bilinear", align_corners=False)
-        x1 = self.inter_r1(x1_up + l1)
+        branch_1 = self.tpa_branch_1(branches[0])
+        branch_2 = self.tpa_branch_2(branches[1])
+        branch_3 = self.tpa_branch_3(branches[2])
+        branch_4 = self.tpa_branch_4(branches[3])
 
-        # Final prediction
-        logits = self.out_conv(x1)   
-        return logits
+        # SAD starts here: each branch is refined, then merged top-down.
+        level_1 = self.sad_intra_1(branch_1)
+        level_2 = self.sad_intra_2(branch_2)
+        level_3 = self.sad_intra_3(branch_3)
+        level_4 = self.sad_intra_4(branch_4)
+
+        x4 = self.sad_inter_4(level_4)
+        x3_up = F.interpolate(x4, size=level_3.shape[-2:], mode="bilinear", align_corners=False)
+        x3 = self.sad_inter_3(x3_up + level_3)
+
+        x2_up = F.interpolate(x3, size=level_2.shape[-2:], mode="bilinear", align_corners=False)
+        x2 = self.sad_inter_2(x2_up + level_2)
+
+        x1_up = F.interpolate(x2, size=level_1.shape[-2:], mode="bilinear", align_corners=False)
+        x1 = self.sad_inter_1(x1_up + level_1)
+
+        return self.out_conv(x1)
+
 
 class DPT(nn.Module):
     def __init__(
-        self, 
-        encoder_size='base', 
+        self,
+        encoder_size='base',
         nclass=2,
-        features=128, 
+        decoder_channels=128,
         patch_size=16,
         use_bn=False,
-        backbone=None
+        backbone=None,
     ):
         super(DPT, self).__init__()
-        
+
         self.intermediate_layer_idx = {
             'small': [2, 5, 8, 11],
-            'base': [2, 5, 8, 11], 
+            'base': [2, 5, 8, 11],
             'large': [4, 11, 17, 23],
         }
-        
+
         self.encoder_size = encoder_size
         self.patch_size = patch_size
         self.backbone = backbone
         self.nclass = nclass
         self.in_dims = [self.backbone.embed_dim] * 4
-        self.head = MiniDPTHead(self.in_dims, self.backbone.embed_dim, self.nclass, use_bn)
+        self.decoder = TPASADDecoder(
+            self.in_dims,
+            decoder_channels=decoder_channels,
+            num_classes=self.nclass,
+            use_group_norm=not use_bn,
+        )
 
     def lock_backbone(self):
         for p in self.backbone.parameters():
@@ -113,9 +154,8 @@ class DPT(nn.Module):
             x, n=self.intermediate_layer_idx[self.encoder_size]
         )
 
-        out = self.head(feats, patch_h, patch_w)
-        out = F.interpolate(out, (patch_h * self.patch_size, patch_w * self.patch_size),
-                            mode='bilinear', align_corners=True)
+        out = self.decoder(feats, patch_h, patch_w)
+        out = F.interpolate(out, size=x.shape[-2:], mode='bilinear', align_corners=False)
         if return_feats:
             return out, feats[-1]
         return out

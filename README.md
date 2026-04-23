@@ -1,24 +1,30 @@
-# segdino_v2
+# SegDINO V2
+
+`new_project` keeps the DINOv3 backbone and the DPT-style decoder, with the decoder code annotated around `TPA` and `SAD`.
+
+## Config
+
+All experiment settings live in `config.yaml`.
+
+- Edit dataset paths, checkpoints, and model defaults there.
+- Relative paths are resolved from `new_project/`.
+- `train.py` reads `SEGDINO_EXPERIMENT` and defaults to `kvasir_train`.
+- `test.py` reads `SEGDINO_EXPERIMENT` and defaults to `isic_test`.
+
+## Run
+
+Use the scripts in `scripts/`:
 
 ```bash
-CUDA_VISIBLE_DEVICES=0 python train.py \
-  --data_dir ./segdata/kvasir \
-  --img_size 256 \
-  --batch_size 4 \
-  --epochs 50 \
-  --lr 1e-4 \
-  --repo_dir ./dinov3 \
-  --dino_size s \
-  --dino_ckpt ./dinov3_vits16_pretrain_lvd1689m-08c60483.pth
+bash scripts/train_kvasir.sh
+bash scripts/train_tn3k.sh
+bash scripts/train_isic.sh
+bash scripts/test_kvasir.sh
+bash scripts/test_isic.sh
 ```
 
+You can override the GPU without touching Python:
+
 ```bash
-CUDA_VISIBLE_DEVICES=1 python test.py \
-  --data_dir ./segdata/kvasir \
-  --batch_size 1 \
-  --img_size 256 \
-  --repo_dir ./dinov3 \
-  --dino_size s \
-  --dino_ckpt ./dinov3_vits16_pretrain_lvd1689m-08c60483.pth \
-  --ckpt xxx.pth
+CUDA_VISIBLE_DEVICES=1 bash scripts/train_kvasir.sh
 ```

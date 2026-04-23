@@ -1,15 +1,19 @@
 import os
 import csv
 import math
+from pathlib import Path
+
 import numpy as np
 import torch
 from tqdm import tqdm
+
+from config_loader import DEFAULT_TEST_EXPERIMENT, EXPERIMENT_ENV_VAR, get_test_config
 from mydataset import FolderDataset, TestTransform
+from runtime import build_model, get_device, summarize_parameters
 from utils import (
     dice_binary_numpy, iou_binary_numpy, hd95_binary_numpy, 
     save_eval_visuals, load_ckpt_flex
 )
-from dpt import DPT
 
 @torch.no_grad()
 def run_test(model, loader, device, dice_thr=0.5, vis_dir=None, csv_path=None):
@@ -69,38 +73,22 @@ def run_test(model, loader, device, dice_thr=0.5, vis_dir=None, csv_path=None):
     print(f"Dice={mean_dice:.4f}  IoU={mean_iou:.4f}  HD95={mean_hd95 if math.isfinite(mean_hd95) else 'inf'}")
     print("=" * 60)
 
+
 def main():
-    import argparse
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--data_dir", type=str, default="./kvasir")
-    parser.add_argument("--batch_size", type=int, default=1)
-    parser.add_argument("--num_workers", type=int, default=8)
-    parser.add_argument("--dice_thr", type=float, default=0.5)
-    parser.add_argument("--img_size", type=int, default=256)
-    parser.add_argument("--ckpt", type=str, required=True)
-    parser.add_argument("--save_root", type=str, default="./runs_test")
-    parser.add_argument("--dino_size", type=str, default="s", choices=["b", "s"])
-    parser.add_argument("--dino_ckpt", type=str, required=True)
-    parser.add_argument("--repo_dir", type=str, default="./dinov3")
-    args = parser.parse_args()
+    experiment_name = os.environ.get(EXPERIMENT_ENV_VAR, DEFAULT_TEST_EXPERIMENT)
+    config = get_test_config(experiment_name)
 
-    dataset_name = os.path.basename(args.data_dir.rstrip("/"))
-    save_root = os.path.join(args.save_root, f"{dataset_name}_segdino_{args.dino_size}_test")
-    vis_dir   = os.path.join(save_root, "vis")
-    csv_path  = os.path.join(save_root, "metrics.csv")
+    save_root = Path(config.save_root) / f"{config.dataset.name}_segdino_{config.model.dino_size}_test"
+    vis_dir = save_root / "vis"
+    csv_path = save_root / "metrics.csv"
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = get_device()
+    model, backbone = build_model(config.model, device)
+    total_params, backbone_params, other_params = summarize_parameters(model, backbone)
 
-    if args.dino_size == "b":
-        backbone = torch.hub.load(args.repo_dir, 'dinov3_vitb16', source='local', weights=args.dino_ckpt)
-    else:
-        backbone = torch.hub.load(args.repo_dir, 'dinov3_vits16', source='local', weights=args.dino_ckpt)
-
-    model = DPT(nclass=1, backbone=backbone).to(device)
-    
-    total_params = sum(p.numel() for p in model.parameters())
-    backbone_params = sum(p.numel() for p in backbone.parameters())
-    other_params = total_params - backbone_params
+    print(f"Testing experiment: {config.name}")
+    print(f"Dataset: {config.dataset.data_dir}")
+    print(f"Checkpoint: {config.ckpt_path}")
 
     print("=" * 60)
     print(f"Model Parameter Counts:")
@@ -109,20 +97,25 @@ def main():
     print(f"  - Total Parameters : {total_params / 1e6:>8.2f} M")
     print("=" * 60)
 
-    load_ckpt_flex(model, args.ckpt, map_location=device)
+    load_ckpt_flex(model, config.ckpt_path, map_location=device)
 
     test_dataset = FolderDataset(
-        root=args.data_dir,
+        root=config.dataset.data_dir,
         split="test",
-        transform=TestTransform(img_size=(args.img_size, args.img_size))
+        transform=TestTransform(img_size=(config.dataset.img_size, config.dataset.img_size))
     )
     test_loader = torch.utils.data.DataLoader(
-        test_dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers
+        test_dataset,
+        batch_size=config.batch_size,
+        shuffle=False,
+        num_workers=config.num_workers,
     )
 
     run_test(
         model, test_loader, device, 
-        dice_thr=args.dice_thr, vis_dir=vis_dir, csv_path=csv_path
+        dice_thr=config.dice_thr,
+        vis_dir=str(vis_dir),
+        csv_path=str(csv_path),
     )
 
 if __name__ == "__main__":

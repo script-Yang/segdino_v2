@@ -1,13 +1,15 @@
 import os
-import argparse
+from pathlib import Path
+
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from mydataset import FolderDataset, TrainTransform, TestTransform 
+from config_loader import DEFAULT_TRAIN_EXPERIMENT, EXPERIMENT_ENV_VAR, get_train_config
+from mydataset import FolderDataset, TrainTransform, TestTransform
+from runtime import build_model, get_device
 from utils import dice_coeff, iou_coeff
-from dpt import DPT 
 
 @torch.no_grad()
 def evaluate(model, test_loader, device):
@@ -30,52 +32,50 @@ def evaluate(model, test_loader, device):
         
     return running_dice / len(test_loader), running_iou / len(test_loader)
 
+
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--data_dir", type=str, default="./kvasir")
-    parser.add_argument("--img_size", type=int, default=256)
-    parser.add_argument("--batch_size", type=int, default=8)
-    parser.add_argument("--epochs", type=int, default=50)
-    parser.add_argument("--lr", type=float, default=1e-4)
-    parser.add_argument("--save_dir", type=str, default="./checkpoints")
-    parser.add_argument("--dino_size", type=str, default="s", choices=["b", "s"])
-    parser.add_argument("--dino_ckpt", type=str, required=True)
-    parser.add_argument("--repo_dir", type=str, default="./dinov3")
-    args = parser.parse_args()
+    experiment_name = os.environ.get(EXPERIMENT_ENV_VAR, DEFAULT_TRAIN_EXPERIMENT)
+    config = get_train_config(experiment_name)
+    device = get_device()
+    save_dir = Path(config.save_dir) / config.dataset.name
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    dataset_name = os.path.basename(args.data_dir.rstrip("/"))
-    args.save_dir = os.path.join(args.save_dir, dataset_name)
-
-    os.makedirs(args.save_dir, exist_ok=True)
+    save_dir.mkdir(parents=True, exist_ok=True)
+    print(f"Training experiment: {config.name}")
+    print(f"Dataset: {config.dataset.data_dir}")
+    print(f"Decoder dim: {config.model.decoder_dim}")
 
     train_dataset = FolderDataset(
-        root=args.data_dir,
+        root=config.dataset.data_dir,
         split="train",
-        transform=TrainTransform(img_size=(args.img_size, args.img_size))
+        transform=TrainTransform(img_size=(config.dataset.img_size, config.dataset.img_size))
     )
-    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=4)
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=config.batch_size,
+        shuffle=True,
+        num_workers=config.train_workers,
+    )
 
     test_dataset = FolderDataset(
-        root=args.data_dir,
+        root=config.dataset.data_dir,
         split="test",
-        transform=TestTransform(img_size=(args.img_size, args.img_size)) 
+        transform=TestTransform(img_size=(config.dataset.img_size, config.dataset.img_size))
     )
-    test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False, num_workers=2)
+    test_loader = DataLoader(
+        test_dataset,
+        batch_size=1,
+        shuffle=False,
+        num_workers=config.val_workers,
+    )
 
-    if args.dino_size == "b":
-        backbone = torch.hub.load(args.repo_dir, 'dinov3_vitb16', source='local', weights=args.dino_ckpt)
-    else:
-        backbone = torch.hub.load(args.repo_dir, 'dinov3_vits16', source='local', weights=args.dino_ckpt)
-        
-    model = DPT(nclass=1, backbone=backbone).to(device)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
+    model, _ = build_model(config.model, device)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=config.lr)
     criterion = nn.BCEWithLogitsLoss()
 
     best_val_dice = 0.0
     best_ckpt_path = ""
 
-    for epoch in range(args.epochs):
+    for epoch in range(config.epochs):
         model.train()
         pbar = tqdm(train_loader)
         
@@ -103,17 +103,16 @@ def main():
         val_dice, val_iou = evaluate(model, test_loader, device)
         print(f"Epoch {epoch+1:02d} | Train Loss: {avg_loss:.4f} | Train Dice: {avg_dice:.4f} | Val Dice: {val_dice:.4f} | Val IoU: {val_iou:.4f}")
 
-        latest_path = os.path.join(args.save_dir, "latest_model.pth")
+        latest_path = save_dir / "latest_model.pth"
         torch.save(model.state_dict(), latest_path)
         
         if val_dice > best_val_dice:
             best_val_dice = val_dice
-            if best_ckpt_path and os.path.exists(best_ckpt_path):
-                os.remove(best_ckpt_path)
-            
-            # new_best_name = f"best_ep{epoch+1:02d}_dice_{val_dice:.4f}_iou_{val_iou:.4f}.pth"
+            if best_ckpt_path and best_ckpt_path.exists():
+                best_ckpt_path.unlink()
+             
             new_best_name = f"best_dice_{val_dice:.4f}_iou_{val_iou:.4f}.pth"
-            best_ckpt_path = os.path.join(args.save_dir, new_best_name)
+            best_ckpt_path = save_dir / new_best_name
             torch.save(model.state_dict(), best_ckpt_path)
 
 if __name__ == "__main__":

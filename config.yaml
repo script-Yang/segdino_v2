@@ -1,0 +1,78 @@
+{
+  "experiment_env_var": "SEGDINO_EXPERIMENT",
+  "default_train_experiment": "kvasir_train",
+  "default_test_experiment": "isic_test",
+  "datasets": {
+    "kvasir": {
+      "name": "kvasir",
+      "data_dir": "../segdata/kvasir",
+      "img_size": 256
+    },
+    "tn3k": {
+      "name": "tn3k",
+      "data_dir": "../segdata/tn3k",
+      "img_size": 256
+    },
+    "isic": {
+      "name": "ISIC",
+      "data_dir": "../segdata/ISIC",
+      "img_size": 256
+    }
+  },
+  "base_model": {
+    "dino_size": "s",
+    "dino_repo": "./dinov3",
+    "dino_ckpt": "./weights/dinov3_vits16_pretrain_lvd1689m-08c60483.pth",
+    "decoder_dim": 128,
+    "use_bn": false,
+    "num_classes": 1,
+    "patch_size": 16
+  },
+  "train_experiments": {
+    "kvasir_train": {
+      "dataset": "kvasir",
+      "batch_size": 4,
+      "epochs": 50,
+      "lr": 0.0001,
+      "save_dir": "./checkpoints",
+      "train_workers": 4,
+      "val_workers": 2
+    },
+    "tn3k_train": {
+      "dataset": "tn3k",
+      "batch_size": 4,
+      "epochs": 50,
+      "lr": 0.0001,
+      "save_dir": "./checkpoints",
+      "train_workers": 4,
+      "val_workers": 2
+    },
+    "isic_train": {
+      "dataset": "isic",
+      "batch_size": 4,
+      "epochs": 50,
+      "lr": 0.0001,
+      "save_dir": "./checkpoints",
+      "train_workers": 4,
+      "val_workers": 2
+    }
+  },
+  "test_experiments": {
+    "kvasir_test": {
+      "dataset": "kvasir",
+      "ckpt_path": "./checkpoints/kvasir/latest_model.pth",
+      "batch_size": 1,
+      "num_workers": 8,
+      "dice_thr": 0.5,
+      "save_root": "./runs_test"
+    },
+    "isic_test": {
+      "dataset": "isic",
+      "ckpt_path": "./checkpoints/ISIC/latest_model.pth",
+      "batch_size": 1,
+      "num_workers": 8,
+      "dice_thr": 0.5,
+      "save_root": "./runs_test"
+    }
+  }
+}
