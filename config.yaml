@@ -1,7 +1,7 @@
 {
   "experiment_env_var": "SEGDINO_EXPERIMENT",
   "default_train_experiment": "kvasir_train",
-  "default_test_experiment": "isic_test",
+  "default_test_experiment": "kvasir_test",
   "datasets": {
     "kvasir": {
       "name": "kvasir",
@@ -23,7 +23,7 @@
     "dino_size": "s",
     "dino_repo": "./dinov3",
     "dino_ckpt": "./weights/dinov3_vits16_pretrain_lvd1689m-08c60483.pth",
-    "decoder_dim": 128,
+    "decoder_dim": 256,
     "use_bn": false,
     "num_classes": 1,
     "patch_size": 16

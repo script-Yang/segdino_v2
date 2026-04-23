@@ -1,12 +1,12 @@
 # SegDINO V2
 
+SegDINOv2 introduces multi-scale feature processing for segmentation.
+
 Clone the DINOv3 repository:
 
 ```bash
 git clone https://github.com/facebookresearch/dinov3.git
 ```
-
-V2 introduces multi-scale feature processing for segmentation.
 
 ## Config
 
@@ -14,8 +14,8 @@ All experiment settings live in `config.yaml`.
 
 - Edit dataset paths, checkpoints, and model defaults there.
 - Relative paths are resolved from `new_project/`.
-- `train.py` reads `SEGDINO_EXPERIMENT` and defaults to `kvasir_train`.
-- `test.py` reads `SEGDINO_EXPERIMENT` and defaults to `isic_test`.
+- `decoder_dim` defaults to `256`.
+- For more challenging segmentation tasks, you can increase it to `512`.
 
 ## Run
 
