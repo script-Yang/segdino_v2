@@ -1,6 +1,12 @@
 # SegDINO V2
 
-`new_project` keeps the DINOv3 backbone and the DPT-style decoder, with the decoder code annotated around `TPA` and `SAD`.
+Clone the DINOv3 repository:
+
+```bash
+git clone https://github.com/facebookresearch/dinov3.git
+```
+
+V2 introduces multi-scale feature processing for segmentation.
 
 ## Config
 
