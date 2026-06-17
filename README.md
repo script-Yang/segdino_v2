@@ -2,7 +2,7 @@
 
 <h5 align="center">
 
-[![arXiv](https://img.shields.io/badge/Arxiv-2511.06863-AD1C18.svg?logo=arXiv)](https://arxiv.org/abs/2606.17972)
+[![arXiv](https://img.shields.io/badge/Arxiv-2606.17972-AD1C18.svg?logo=arXiv)](https://arxiv.org/abs/2606.17972)
 
 </h5>
 
