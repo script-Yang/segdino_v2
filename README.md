@@ -7,13 +7,10 @@
 </h5>
 
 ## News
- 
-> **2026.06** Our [paper](https://arxiv.org/abs/2606.17972) was released on arXiv.
 
-> **2026.05** SegDINO was selected for early acceptance at MICCAI 2026.
-
-> **2026.06** Code released.
-
+> **2026.06** Our [paper](https://arxiv.org/abs/2606.17972) was released on arXiv.  
+> **2026.05** SegDINO was selected for early acceptance at MICCAI 2026.  
+> **2026.06** Code released.  
 > **2025.09** Check out SegDINO-V1 [here](https://github.com/script-Yang/segdino).
 
 SegDINOv2 introduces multi-scale feature processing for segmentation.
